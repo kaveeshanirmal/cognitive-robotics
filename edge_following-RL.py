@@ -9,6 +9,7 @@ from time import sleep
 from ev3dev2.motor import LargeMotor, OUTPUT_B, OUTPUT_C, SpeedPercent
 from ev3dev2.sensor import INPUT_1, INPUT_3
 from ev3dev2.sensor.lego import ColorSensor, InfraredSensor
+from ev3dev2.button import Button
 
 # ==========================================
 # 1. Hardware Initialization
@@ -22,6 +23,7 @@ right_motor = LargeMotor(OUTPUT_B)
 # Color sensor facing down on Port 1, Infrared facing forward on Port 3
 color_sensor = ColorSensor(INPUT_1)
 ir_sensor = InfraredSensor(INPUT_3)
+btn = Button()
 
 # Set the color sensor to measure reflected light intensity (0 to 100)
 color_sensor.mode = 'COL-REFLECT'
@@ -165,7 +167,8 @@ Q_table = [[0.0 for _ in range(NUM_ACTIONS)] for _ in range(NUM_STATES)]
 # Hyperparameters
 alpha = 0.25    # Learning rate
 gamma = 0.9     # Discount factor
-epsilon = 0.12  # Exploration rate
+epsilon = 0.12  # Exploration rate 0.12 to learn, 0 to exploit
+
 
 def get_reward(prev_state, action, next_state):
     """
@@ -236,6 +239,8 @@ def load_q_table():
 # ==========================================
 
 if __name__ == '__main__':
+    running_flag = True
+
     try:
         print("==========================================")
         print("   EV3 Q-Learning Edge Follower Starting  ")
@@ -245,7 +250,13 @@ if __name__ == '__main__':
         current_state = get_current_state()
         
         step_count = 0
-        while True:
+        while running_flag:
+            # 0. Check for manual EV3 Middle Button (Enter) press to stop
+            if btn.enter:
+                print("\n[BUTTON] Middle button pressed. Gracefully stopping...")
+                running_flag = False
+                break
+                
             # 1. Non-RL Obstacle Avoidance Override (IR Proximity < 20)
             if check_for_obstacles() < 20:
                 avoid_obstacle_and_find_path()
@@ -282,7 +293,9 @@ if __name__ == '__main__':
             
             current_state = next_state
             
-    except KeyboardInterrupt:
+    except Exception as e:
+        print("Unexpected error: {}".format(e))
+    finally:
         print("\nStopping robot...")
         stop_motors()
         save_q_table()
@@ -297,3 +310,6 @@ if __name__ == '__main__':
                 Q_table[s][2],
                 Q_table[s][3]
             ))
+            
+        print("\n[DISPLAY] Keeping training summary visible for 10 seconds before closing...")
+        sleep(10)
