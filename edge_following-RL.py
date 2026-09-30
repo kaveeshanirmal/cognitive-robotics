@@ -7,7 +7,7 @@ import random
 from time import sleep
 
 from ev3dev2.motor import LargeMotor, OUTPUT_B, OUTPUT_C, SpeedPercent
-from ev3dev2.sensor import INPUT_1, INPUT_3
+from ev3dev2.sensor import INPUT_1, INPUT_4
 from ev3dev2.sensor.lego import ColorSensor, InfraredSensor
 from ev3dev2.button import Button
 
@@ -22,7 +22,7 @@ right_motor = LargeMotor(OUTPUT_B)
 # Initialize the sensors
 # Color sensor facing down on Port 1, Infrared facing forward on Port 3
 color_sensor = ColorSensor(INPUT_1)
-ir_sensor = InfraredSensor(INPUT_3)
+ir_sensor = InfraredSensor(INPUT_4)
 btn = Button()
 
 # Set the color sensor to measure reflected light intensity (0 to 100)
@@ -64,36 +64,70 @@ def check_for_obstacles():
 # 3. Motor Control Functions (For Actions)
 # ==========================================
 
+# Track consecutive turns to balance smooth straight lines with sharp 90-degree cornering
+consecutive_turns = 0
+last_turn_action = None
+
 def execute_action(action_id):
     """
     Executes a movement based on the chosen Q-learning action:
     0: Forward (Straight)
-    1: Left Pivot Turn (Steers left towards edge when inside white line)
-    2: Right Pivot Turn (Steers right towards edge when outside on black mat)
+    1: Left Turn (Steers left towards edge when inside white line)
+    2: Right Turn (Steers right towards edge when outside on black mat)
     3: Reverse
+    
+    Adaptive Turning Strategy:
+    - 1st turn cycle (Straight line drift): Soft curve (inner speed +4) for zero wobble.
+    - 2+ consecutive turn cycles (90-degree corner): Sharp pivot (inner speed -10, outer speed 18)
+      to spin in place without overshooting.
     """
+    global consecutive_turns, last_turn_action
+    
     if action_id == 0:
-        # Forward
+        # Reset turn tracking when moving straight along the edge
+        consecutive_turns = 0
+        last_turn_action = None
         left_motor.on(SpeedPercent(BASE_SPEED))
         right_motor.on(SpeedPercent(BASE_SPEED))
         
-    elif action_id == 1:
-        # Left Pivot Turn (Inner wheel slows down to turn left)
-        left_motor.on(SpeedPercent(-5))
-        right_motor.on(SpeedPercent(BASE_SPEED))
-        
-    elif action_id == 2:
-        # Right Pivot Turn (Inner wheel slows down to turn right)
-        left_motor.on(SpeedPercent(BASE_SPEED))
-        right_motor.on(SpeedPercent(-5))
+    elif action_id in (1, 2):
+        if action_id == last_turn_action:
+            consecutive_turns += 1
+        else:
+            consecutive_turns = 1
+            last_turn_action = action_id
+            
+        # Determine turning severity:
+        if consecutive_turns >= 2:
+            # 90-degree corner detected: sharp pivot to stay on track
+            inner_speed = -10
+            outer_speed = 18
+        else:
+            # Minor straight-line drift: gentle curve to eliminate wobble
+            inner_speed = 4
+            outer_speed = BASE_SPEED
+            
+        if action_id == 1:
+            # Left Turn (left wheel is inner)
+            left_motor.on(SpeedPercent(inner_speed))
+            right_motor.on(SpeedPercent(outer_speed))
+        else:
+            # Right Turn (right wheel is inner)
+            left_motor.on(SpeedPercent(outer_speed))
+            right_motor.on(SpeedPercent(inner_speed))
         
     elif action_id == 3:
+        consecutive_turns = 0
+        last_turn_action = None
         # Reverse
         left_motor.on(SpeedPercent(-20))
         right_motor.on(SpeedPercent(-20))
 
 def stop_motors():
-    """Halts both motors."""
+    """Halts both motors and resets turn tracking."""
+    global consecutive_turns, last_turn_action
+    consecutive_turns = 0
+    last_turn_action = None
     left_motor.off()
     right_motor.off()
 
@@ -167,7 +201,7 @@ Q_table = [[0.0 for _ in range(NUM_ACTIONS)] for _ in range(NUM_STATES)]
 # Hyperparameters
 alpha = 0.25    # Learning rate
 gamma = 0.9     # Discount factor
-epsilon = 0.12  # Exploration rate 0.12 to learn, 0 to exploit
+epsilon = 0  # Exploration rate 0.12 to learn, 0 to exploit
 
 
 def get_reward(prev_state, action, next_state):
